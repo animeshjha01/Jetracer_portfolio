@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JET RACER — V2V Autonomous Swarm Coordination</title>
+<meta name="description" content="Resource-optimized Vehicle-to-Vehicle autonomous swarm coordination on two NVIDIA Jetson Nano powered JetRacer modules.">
+<meta name="theme-color" content="#F4FBF6">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script>
+/* Cold start. This has to be an inline head script rather than part of the
+   bundle, because it must beat two different things that both run earlier than
+   a deferred module:
+
+     1. The browser's own scroll restoration, which puts the reader back where
+        they were on reload — halfway through a page whose intro is a sequence.
+     2. GSAP's ScrollTrigger, which reads history.scrollRestoration once when it
+        initialises and writes that captured value back on every refresh. Set
+        this any later and ScrollTrigger simply undoes it.
+
+   Stripping the hash here also stops the browser jumping to a #section anchor
+   left in the URL by one of the hero buttons — at this point the body has not
+   been parsed, so there is nothing for it to scroll to yet. */
+(function () {
+  if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+  if (location.hash) {
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+})();
+</script>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════════════════
+     PERSISTENT 3D STAGE — the JetRacer lives here for the whole page
+     ══════════════════════════════════════════════════════════════════════ -->
+<canvas id="stage" aria-hidden="true"></canvas>
+
+<!-- Telemetry HUD, tracks the car during the drive-by -->
+<div class="hud" id="hud" aria-hidden="true">
+  <div class="hud__speedo">
+    <svg viewBox="0 0 120 120" class="hud__dial">
+      <circle cx="60" cy="60" r="52" class="hud__track"/>
+      <circle cx="60" cy="60" r="52" class="hud__fill" id="speedArc"/>
+    </svg>
+    <div class="hud__read"><span id="speedVal">0</span><small>KM/H</small></div>
+  </div>
+  <div class="hud__chips">
+    <div class="chip"><span class="chip__k">NODE</span><span class="chip__v">01 · PERCEPTION</span></div>
+    <div class="chip"><span class="chip__k">LINK</span><span class="chip__v">TAILSCALE · UDP</span></div>
+    <div class="chip"><span class="chip__k">TRACKER</span><span class="chip__v">KCF · LOCKED</span></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════
+     01 · BOOT GATE
+     ══════════════════════════════════════════════════════════════════════ -->
+<div class="boot" id="boot">
+  <div class="boot__grid" aria-hidden="true"></div>
+  <div class="boot__vignette" aria-hidden="true"></div>
+
+  <div class="boot__inner">
+    <p class="boot__eyebrow">
+      <span class="dot"></span>
+      NVIDIA JETSON NANO &nbsp;·&nbsp; DUAL-MODULE V2V &nbsp;·&nbsp; EDGE AUTONOMY
+    </p>
+
+    <button class="ignite" id="startBtn" type="button" aria-label="Start — launch the JetRacer">
+      <span class="ignite__halo" aria-hidden="true"></span>
+      <span class="ignite__ring" aria-hidden="true"></span>
+      <span class="ignite__face">
+        <span class="ignite__label">START</span>
+        <span class="ignite__sub">ENGAGE DRIVE</span>
+      </span>
+      <span class="ignite__shine" aria-hidden="true"></span>
+    </button>
+
+    <p class="boot__hint">Press to spin up both modules</p>
+  </div>
+
+  <div class="boot__foot">
+    <span>RESOURCE-OPTIMIZED SWARM COORDINATION</span>
+    <span>4GB RAM &nbsp;/&nbsp; 5–10W &nbsp;/&nbsp; 472 GFLOPS</span>
+  </div>
+</div>
+
+<div class="flash" id="flash" aria-hidden="true"></div>
+
+<main id="main" class="main">
+
+  <!-- ════════════════════════════════════════════════════════════════
+       02 · DRIVE-BY — the car crosses a locked-off frame at 30 km/h
+       ════════════════════════════════════════════════════════════════ -->
+  <section class="sec sec--drive" id="driveSec">
+    <div class="drive__readout">
+      <span class="drive__tag">RUN 001</span>
+      <span class="drive__line" id="driveLine">SPOOLING MOTORS…</span>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       03 · TITLE
+       ════════════════════════════════════════════════════════════════ -->
+  <section class="sec sec--title" id="titleSec">
+    <div class="title__wrap">
+      <p class="title__kicker" data-reveal>PROJECT SUMMARY</p>
+      <h1 class="wordmark" id="wordmark" aria-label="Jet Racer">
+        <span class="wordmark__row">
+          <span class="ch">J</span><span class="ch">E</span><span class="ch">T</span>
+        </span>
+        <span class="wordmark__row wordmark__row--out">
+          <span class="ch">R</span><span class="ch">A</span><span class="ch">C</span><span class="ch">E</span><span class="ch">R</span>
+        </span>
+      </h1>
+      <p class="title__sub" data-reveal>
+        Resource-Optimized Vehicle-to-Vehicle<br>Autonomous Swarm Coordination
+      </p>
+      <div class="title__rule" data-reveal><span></span></div>
+      <div class="title__meta" data-reveal>
+        <div><b>02</b><small>JETRACER MODULES</small></div>
+        <div><b>4GB</b><small>RAM CEILING</small></div>
+        <div><b>UDP</b><small>OVER-THE-AIR BRIDGE</small></div>
+      </div>
+    </div>
+    <div class="scrollcue" data-reveal><span></span>SCROLL</div>
+  </section>
+
+  <!-- Everything below sits on an opaque backdrop so the fixed WebGL stage,
+       which stays live behind the drive-by and the title, cannot bleed through. -->
+  <div class="page">
+
+  <!-- ════════════════════════════════════════════════════════════════
+       04 · HERO — the standalone landing page, first thing after the intro
+       ════════════════════════════════════════════════════════════════ -->
+  <section class="sec sec--hero" id="heroSec">
+    <div class="hero__glow" aria-hidden="true"></div>
+
+    <div class="hero__grid">
+      <div class="hero__copy">
+        <p class="hero__badge" data-hero><span class="dot"></span>DUAL-MODULE V2V · EDGE AUTONOMY</p>
+
+        <h2 class="hero__title">
+          <span class="hero__line"><span>One car sees.</span></span>
+          <span class="hero__line"><span>The other</span></span>
+          <span class="hero__line hero__line--accent"><span>just listens.</span></span>
+        </h2>
+
+        <p class="hero__lede" data-hero>
+          A resource-optimized collision-avoidance system running on two NVIDIA Jetson Nano
+          powered JetRacers — where one vehicle sees for both, and the other answers a ping
+          in four instructions.
+        </p>
+
+        <div class="hero__cta" data-hero>
+          <a class="btn btn--solid" href="#pixelSec">Read the build</a>
+          <a class="btn btn--ghost" href="#vidSec">Watch a run</a>
+        </div>
+
+        <dl class="hero__stats" data-hero>
+          <div><dt>02</dt><dd>JETRACER MODULES</dd></div>
+          <div><dt>4GB</dt><dd>RAM PER NODE</dd></div>
+          <div><dt>0</dt><dd>COLLISIONS</dd></div>
+        </dl>
+      </div>
+
+      <div class="hero__media" data-hero>
+        <figure class="hero__card" data-comet>
+          <img src="media/robot-hero.jpeg"
+               alt="JetRacer module in three-quarter view — green chassis, chrome blue wheels and roof-mounted LiDAR"
+               width="1440" height="2560" fetchpriority="high">
+          <figcaption>
+            <b>WAVESHARE JETRACER ROS</b>
+            <span>Jetson Nano · CSI camera · KCF tracker</span>
+          </figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       05 · PIXEL REVEAL — the machine materialises
+       ════════════════════════════════════════════════════════════════ -->
+  <section class="sec sec--pixel" id="pixelSec">
+    <div class="pixel__layout">
+      <div class="pixel__stage">
+        <canvas id="pixelCanvas" aria-label="Photograph of the JetRacer module resolving pixel by pixel"></canvas>
+        <div class="pixel__frame" aria-hidden="true">
+          <span class="c c--tl"></span><span class="c c--tr"></span>
+          <span class="c c--bl"></span><span class="c c--br"></span>
+        </div>
+        <div class="pixel__scanline" aria-hidden="true"></div>
+        <div class="pixel__stat"><span id="pixelPct">0</span>% RESOLVED</div>
+      </div>
+
+      <div class="pixel__copy">
+        <p class="eyebrow" data-reveal><i></i>01 — HARDWARE ARCHITECTURE</p>
+        <h2 class="h2" data-reveal>Two modules.<br>One shared intent.</h2>
+        <p class="lede" data-reveal>
+          The project runs on two assembled <b>JetRacer AI modules</b>, each powered by the
+          NVIDIA Jetson Nano developer kit — a small, powerful computer built for running
+          AI and robotics at the edge.
+        </p>
+        <p class="body" data-reveal>
+          A quad-core ARM CPU, an integrated NVIDIA GPU and 4GB of memory let each unit run
+          machine-learning models on a budget of just 5 to 10 watts. That envelope is the
+          single constraint every decision in this project bends around.
+        </p>
+        <p class="body" data-reveal>
+          To bring the hardware up we flashed the official NVIDIA system image to a microSD
+          card with Balena Etcher, seated it in the developer kit, connected keyboard, mouse
+          and display, and powered each module from a 5V supply.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       06 · SPEC BENTO
+       ════════════════════════════════════════════════════════════════ -->
+  <section class="sec sec--specs" id="specSec">
+    <header class="sec__head">
+      <p class="eyebrow" data-reveal><i></i>EDGE COMPUTING PLATFORM</p>
+      <h2 class="h2" data-reveal>Core specifications<br>per JetRacer unit</h2>
+    </header>
+
+    <div class="bento">
+      <article class="tile tile--wide" data-comet data-reveal>
+        <span class="tile__idx">01</span>
+        <h3 class="tile__val"><span class="num" data-count="128">0</span>-CORE</h3>
+        <p class="tile__label">NVIDIA MAXWELL GPU</p>
+        <p class="tile__note"><span class="num" data-count="472">0</span> GFLOPS of on-board throughput</p>
+        <div class="tile__bar"><span style="--w:88%"></span></div>
+      </article>
+
+      <article class="tile" data-comet data-reveal>
+        <span class="tile__idx">02</span>
+        <h3 class="tile__val">QUAD<span class="sm">-CORE</span></h3>
+        <p class="tile__label">ARM CORTEX-A57 CPU</p>
+        <div class="tile__bar"><span style="--w:62%"></span></div>
+      </article>
+
+      <article class="tile" data-comet data-reveal>
+        <span class="tile__idx">03</span>
+        <h3 class="tile__val"><span class="num" data-count="4">0</span>GB</h3>
+        <p class="tile__label">LPDDR4 MEMORY</p>
+        <p class="tile__note tile__note--warn">The hard ceiling of this build</p>
+        <div class="tile__bar tile__bar--warn"><span style="--w:100%"></span></div>
+      </article>
+
+      <article class="tile" data-comet data-reveal>
+        <span class="tile__idx">04</span>
+        <h3 class="tile__val"><span class="num" data-count="5">0</span>–<span class="num" data-count="10">0</span>W</h3>
+        <p class="tile__label">POWER DRAW</p>
+        <div class="tile__bar"><span style="--w:18%"></span></div>
+      </article>
+
+      <article class="tile tile--io" data-comet data-reveal>
+        <span class="tile__idx">05</span>
+        <p class="tile__label tile__label--top">CONNECTIONS</p>
+        <ul class="iolist">
+          <li>USB 3.0 ports</li>
+          <li>HDMI / DisplayPort</li>
+          <li>Gigabit Ethernet</li>
+          <li>40-pin GPIO header</li>
+        </ul>
+      </article>
+    </div>
+
+    <p class="specs__foot" data-reveal>
+      These specifications make the Nano ideal for controlling smart robots that need
+      real-time vision, running object-detection models, and acting as edge gateways
+      that process data locally.
+    </p>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       07 · SOFTWARE PIPELINE
+       ════════════════════════════════════════════════════════════════ -->
+  <section class="sec sec--pipe" id="pipeSec">
+    <header class="sec__head">
+      <p class="eyebrow" data-reveal><i></i>02 — SOFTWARE FOUNDATION &amp; INTEGRATION</p>
+      <h2 class="h2" data-reveal>From bare image<br>to mutual lock-on</h2>
+    </header>
+
+    <ol class="steps">
+      <li class="step" data-reveal>
+        <div class="step__rail"><span class="step__node"></span></div>
+        <div class="step__body">
+          <span class="step__n">STEP 01</span>
+          <h3>Clone the ROS stack</h3>
+          <p>The foundational software was established by cloning the official open-source
+             <b>Waveshare JetRacer ROS</b> repository onto both modules.</p>
+        </div>
+      </li>
+      <li class="step" data-reveal>
+        <div class="step__rail"><span class="step__node"></span></div>
+        <div class="step__body">
+          <span class="step__n">STEP 02</span>
+          <h3>Calibrate the CSI cameras</h3>
+          <p>Following assembly we ran meticulous CSI camera calibrations on both modules
+             to guarantee optical accuracy before any tracking work began.</p>
+        </div>
+      </li>
+      <li class="step" data-reveal>
+        <div class="step__rail"><span class="step__node"></span></div>
+        <div class="step__body">
+          <span class="step__n">STEP 03</span>
+          <h3>Integrate KCF tracking</h3>
+          <p>We integrated <b>Kernelized Correlation Filter</b> object tracking into the camera
+             pipeline — enabling the modules to visually detect and lock onto each other
+             through their live video feeds.</p>
+          <div class="kcf" aria-hidden="true">
+            <span class="kcf__box"><i></i><i></i><i></i><i></i></span>
+            <span class="kcf__tag">TARGET · JETRACER 02</span>
+          </div>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       08 · NETWORK BRIDGE
+       ════════════════════════════════════════════════════════════════ -->
+  <section class="sec sec--net" id="netSec">
+    <header class="sec__head sec__head--c">
+      <p class="eyebrow" data-reveal><i></i>03 — NETWORKING &amp; OVER-THE-AIR COORDINATION</p>
+      <h2 class="h2" data-reveal>A secure bridge<br>between two vehicles</h2>
+      <p class="lede lede--c" data-reveal>
+        To enable V2V communication we bypassed standard localized networks and integrated
+        <b>Tailscale</b>. Dynamic IPs assigned to both modules over the VPN gave us a secure,
+        low-latency UDP telemetry bridge for exchanging physical state data instantly.
+      </p>
+    </header>
+
+    <div class="link" data-reveal>
+      <div class="link__node">
+        <div class="node__ring"><span></span></div>
+        <b>JETRACER 01</b>
+        <small>PRIMARY PERCEPTION NODE</small>
+        <em>CAMERA · KCF TRACKER</em>
+      </div>
+
+      <!-- Two lanes, because the bridge is bidirectional: the upper one carries
+           the emergency ping out to node 02, the lower one carries node 02's
+           state back. -->
+      <div class="link__wire">
+        <svg viewBox="0 0 400 60" preserveAspectRatio="none" class="link__svg" aria-hidden="true">
+          <path d="M0,22 L400,22" class="wire__base"/>
+          <path d="M0,22 L400,22" class="wire__flow"/>
+          <path d="M0,38 L400,38" class="wire__base"/>
+          <path d="M0,38 L400,38" class="wire__flow wire__flow--back"/>
+        </svg>
+        <span class="link__pkt link__pkt--out" aria-hidden="true"></span>
+        <span class="link__pkt link__pkt--back" aria-hidden="true"></span>
+        <span class="link__label">UDP TELEMETRY · TAILSCALE VPN · DUPLEX</span>
+      </div>
+
+      <div class="link__node">
+        <div class="node__ring"><span></span></div>
+        <b>JETRACER 02</b>
+        <small>EVASION RESPONDER</small>
+        <em>PATH TRACING · HARDCODED</em>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       09 · BOTTLENECK &amp; SOLUTION
+       ════════════════════════════════════════════════════════════════ -->
+  <section class="sec sec--solve" id="solveSec">
+    <div class="solve__grid">
+      <div class="solve__col" data-reveal>
+        <p class="eyebrow eyebrow--warn"><i></i>THE BOTTLENECK</p>
+        <h2 class="h3">4GB is not enough<br>for two thinking cars</h2>
+        <p class="body">
+          During deployment we identified a critical hardware bottleneck: deploying heavy,
+          concurrent computer-vision and decision-making models against a 4GB RAM constraint
+          leads to <b class="warn">system failure</b>.
+        </p>
+        <div class="meter">
+          <div class="meter__row"><span>SYMMETRIC — BOTH THINK</span><b class="warn">OOM · CRASH</b></div>
+          <div class="meter__bar meter__bar--over"><i style="--w:118%"></i></div>
+          <div class="meter__row"><span>ASYMMETRIC — OUR BUILD</span><b class="ok">STABLE</b></div>
+          <div class="meter__bar"><i style="--w:71%"></i></div>
+        </div>
+      </div>
+
+      <div class="solve__col" data-reveal>
+        <p class="eyebrow"><i></i>04 — ASYMMETRIC PERCEPTION</p>
+        <h2 class="h3">Let one car see<br>for both of them</h2>
+        <p class="body">
+          Instead of forcing both robots to process heavy visual data, we designated
+          <b>JetRacer 1</b> as the primary perception node. It runs the camera node and KCF
+          tracking to monitor the path ahead.
+        </p>
+        <p class="body">
+          When JetRacer 1 visually detects JetRacer 2 intersecting its trajectory, it
+          immediately fires a <b class="hot">high-frequency emergency ping</b> to JetRacer 2,
+          initiating the collision-avoidance protocol.
+        </p>
+      </div>
+    </div>
+
+    <div class="evade">
+      <p class="eyebrow" data-reveal><i></i>05 — HARDCODED EVASION &amp; PATH RESUMPTION</p>
+      <h2 class="h2" data-reveal>Four instructions<br>instead of a model</h2>
+      <p class="lede" data-reveal>
+        Because a dynamic ML decision model on JetRacer 2 would exceed the memory limit and
+        crash the board, we engineered a highly optimized, low-complexity alternative.
+      </p>
+
+      <div class="evade__seq">
+        <div class="ev" data-comet data-reveal><span class="ev__n">01</span><b>HALT</b><p>Stops instantaneously on receipt of the emergency ping.</p></div>
+        <div class="ev__arrow" aria-hidden="true"></div>
+        <div class="ev" data-comet data-reveal><span class="ev__n">02</span><b>YIELD</b><p>Gives right-of-way to resolve the trajectory conflict.</p></div>
+        <div class="ev__arrow" aria-hidden="true"></div>
+        <div class="ev" data-comet data-reveal><span class="ev__n">03</span><b>RESUME</b><p>Cleanly re-enters its primary path-tracing model.</p></div>
+        <div class="ev__arrow" aria-hidden="true"></div>
+        <div class="ev" data-comet data-reveal><span class="ev__n">04</span><b>WATCH</b><p>Holds the loop until the next obstruction is detected.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       10 · FIELD GALLERY
+       ════════════════════════════════════════════════════════════════ -->
+  <section class="sec sec--gal" id="galSec">
+    <header class="sec__head">
+      <p class="eyebrow" data-reveal><i></i>FIELD DOCUMENTATION</p>
+      <h2 class="h2" data-reveal>The run, frame by frame</h2>
+    </header>
+
+    <div class="gal">
+      <figure class="shot shot--tall" data-comet data-reveal>
+        <img src="media/robot-hero.jpeg" alt="JetRacer module in three-quarter view showing the green chassis, blue chrome wheels and LiDAR" loading="lazy" width="1440" height="2560">
+        <figcaption><b>Fig. 1</b> Waveshare JetRacer ROS AI Robot</figcaption>
+      </figure>
+      <figure class="shot" data-comet data-reveal>
+        <img src="media/fig-path-tracking.jpeg" alt="Both modules path-tracing around a taped circuit on the floor" loading="lazy" width="746" height="486">
+        <figcaption><b>Fig. 4</b> Path tracking on modules</figcaption>
+      </figure>
+      <figure class="shot" data-comet data-reveal>
+        <img src="media/fig-halt.jpeg" alt="Both modules halted to avoid a collision" loading="lazy" width="746" height="486">
+        <figcaption><b>Fig. 5</b> Modules halt, avoiding collision</figcaption>
+      </figure>
+      <figure class="shot" data-comet data-reveal>
+        <img src="media/fig-clearway.jpeg" alt="Module 1 giving the other module a clear way" loading="lazy" width="746" height="486">
+        <figcaption><b>Fig. 6</b> Module 1 gives Module 2 clear way</figcaption>
+      </figure>
+      <figure class="shot" data-comet data-reveal>
+        <img src="media/fig-resume.jpeg" alt="Module 2 starting motion again after yielding" loading="lazy" width="746" height="486">
+        <figcaption><b>Fig. 7</b> Module 2 resumes motion</figcaption>
+      </figure>
+      <figure class="shot shot--wide" data-comet data-reveal>
+        <img src="media/robot-telemetry.jpeg" alt="JetRacer beside a laptop streaming live odometry showing total distance in metres" loading="lazy" width="4096" height="3072">
+        <figcaption><b>Fig. 8</b> Live odometry — total distance streamed over the bridge</figcaption>
+      </figure>
+      <figure class="shot" data-comet data-reveal>
+        <img src="media/robot-front.jpeg" alt="Head-on view of the JetRacer showing the CSI camera and foam bumper" loading="lazy" width="1440" height="2560">
+        <figcaption><b>Fig. 9</b> CSI camera and foam bumper, head-on</figcaption>
+      </figure>
+      <figure class="shot" data-comet data-reveal>
+        <img src="media/fig-jetson.jpeg" alt="NVIDIA Jetson Nano developer kit" loading="lazy" width="560" height="560">
+        <figcaption><b>Fig. 3</b> NVIDIA Jetson Nano</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       11 · FOOTAGE
+       ════════════════════════════════════════════════════════════════ -->
+  <section class="sec sec--vid" id="vidSec">
+    <header class="sec__head">
+      <p class="eyebrow" data-reveal><i></i>RECORDED RUNS</p>
+      <h2 class="h2" data-reveal>Watch it coordinate</h2>
+      <p class="lede" data-reveal>Two full laps of the circuit, captured live during deployment.</p>
+    </header>
+
+    <div class="vids">
+      <figure class="vid" data-reveal>
+        <div class="vid__shell">
+          <video src="media/run-01.mp4" playsinline muted loop preload="metadata"></video>
+          <button class="vid__play" type="button" aria-label="Play run 001">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+          </button>
+          <div class="vid__scan" aria-hidden="true"></div>
+          <div class="vid__meta">
+            <span class="vid__rec"><i></i>REC</span>
+            <span class="vid__id">RUN 001</span>
+          </div>
+          <div class="vid__prog" aria-hidden="true"><i></i></div>
+        </div>
+        <figcaption>
+          <b>Full circuit — V2V collision avoidance</b>
+          <span>Both modules path-tracing; Node 01 detects the intersection and fires the emergency ping.</span>
+        </figcaption>
+      </figure>
+
+      <figure class="vid" data-reveal>
+        <div class="vid__shell">
+          <video src="media/run-02.mp4" playsinline muted loop preload="metadata"></video>
+          <button class="vid__play" type="button" aria-label="Play run 002">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+          </button>
+          <div class="vid__scan" aria-hidden="true"></div>
+          <div class="vid__meta">
+            <span class="vid__rec"><i></i>REC</span>
+            <span class="vid__id">RUN 002</span>
+          </div>
+          <div class="vid__prog" aria-hidden="true"><i></i></div>
+        </div>
+        <figcaption>
+          <b>Halt, yield and path resumption</b>
+          <span>Node 02 executes the hardcoded evasion sequence, then re-enters its path-tracing model.</span>
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       12 · CONCLUSION
+       ════════════════════════════════════════════════════════════════ -->
+  <section class="sec sec--end" id="endSec">
+    <div class="end__inner">
+      <p class="eyebrow" data-reveal><i></i>CONCLUSION</p>
+      <h2 class="end__quote" data-reveal>
+        Complex multi-agent V2V collision avoidance
+        <em>can</em> be achieved on severely constrained edge hardware —
+        by combining asymmetric visual processing with lightweight,
+        network-triggered evasion.
+      </h2>
+      <div class="end__stats" data-reveal>
+        <div><b>4GB</b><small>RAM PER NODE</small></div>
+        <div><b>5–10W</b><small>POWER ENVELOPE</small></div>
+        <div><b>0</b><small>COLLISIONS</small></div>
+      </div>
+    </div>
+
+    <footer class="foot">
+      <span>JET RACER — RESOURCE-OPTIMIZED V2V AUTONOMOUS SWARM COORDINATION</span>
+      <button class="foot__top" id="toTop" type="button">RESTART ↑</button>
+    </footer>
+  </section>
+
+  </div><!-- /.page -->
+
+</main>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
