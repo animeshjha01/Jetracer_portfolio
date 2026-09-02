@@ -7,6 +7,8 @@ coordinating collision avoidance over a Tailscale UDP bridge.
 Built with **TypeScript + Vite**, **Three.js** for the 3D vehicle and **GSAP /
 ScrollTrigger** for the choreography.
 
+Checkout the frontend: <https://jetracer-portfolio.vercel.app/>
+
 ## Run it
 
 ```bash
